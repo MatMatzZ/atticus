@@ -1,38 +1,23 @@
 @import "tailwindcss";
 
-/* ATTICUS design tokens — calm neutrals + one accent; light and night. */
-:root {
-  --background: #faf8f5;
-  --surface: #ffffff;
-  --foreground: #1f2933;
-  --muted: #52606d;
-  --border: #d9d3ca;
-  --accent: #2b6a64;
-  --accent-contrast: #ffffff;
-  --status-upcoming: #52606d;
-  --status-due-soon: #8a5a00;
-  --status-overdue: #a8321f;
-  --status-urgent: #b00020;
-  --threshold: #a8321f;
-  --focus: #1d4ed8;
-}
+@import "./atticus-tokens.css";
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #12171b;
-    --surface: #1b2228;
-    --foreground: #e8edf0;
-    --muted: #a3b0ba;
-    --border: #33404a;
-    --accent: #6cc4bb;
-    --accent-contrast: #0b1214;
-    --status-upcoming: #a3b0ba;
-    --status-due-soon: #f0b44c;
-    --status-overdue: #ff9b8a;
-    --status-urgent: #ff8a9b;
-    --threshold: #ff9b8a;
-    --focus: #8ab4ff;
-  }
+/* App-level names, backed by the shared ATTICUS tokens (light/night switch
+   happens inside atticus-tokens.css). Edit tokens in packages/core, not here. */
+:root {
+  --background: var(--at-canvas);
+  --surface: var(--at-surface);
+  --foreground: var(--at-ink);
+  --muted: var(--at-muted);
+  --border: var(--at-strong);
+  --accent: var(--at-accent);
+  --accent-contrast: var(--at-on-accent);
+  --status-upcoming: var(--at-status-upcoming-fg);
+  --status-due-soon: var(--at-status-due-soon-fg);
+  --status-overdue: var(--at-status-overdue-fg);
+  --status-urgent: var(--at-urgent);
+  --threshold: var(--at-status-overdue-fg);
+  --focus: var(--at-focus);
 }
 
 @theme inline {
@@ -49,7 +34,7 @@
   --font-sans: var(--font-geist-sans), system-ui, sans-serif;
 }
 
-html { font-size: 18px; }
+html { font-size: var(--at-text-body-size); }
 body { background: var(--background); color: var(--foreground); font-family: var(--font-sans); }
-:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-a, button { min-height: 48px; }
+:focus-visible { outline: var(--at-stroke-focus) solid var(--focus); outline-offset: 2px; }
+a, button { min-height: var(--at-tap-min); }
