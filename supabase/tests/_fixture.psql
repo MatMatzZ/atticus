@@ -1,0 +1,126 @@
+-- Shared fixture, included by every *.test.sql file via \ir (not a test itself).
+-- Runs inside the caller's transaction, so everything is rolled back at the end.
+--
+-- One household "H" with one pet "P" and a full care plan, plus six users:
+--   owner, caregiver, sitter (active), sitter_expired, vet, outsider (no membership)
+
+create extension if not exists pgtap with schema extensions;
+set local search_path = public, extensions;
+
+create schema if not exists tests;
+grant usage on schema tests to authenticated;
+
+-- Fixed ids. Users a1..a6, household b1, pet c1, care plan d*, events e*, misc f*
+create or replace function tests.id(p_key text) returns uuid language sql immutable as $$
+  select ('00000000-0000-0000-0000-0000000000' || case p_key
+    when 'owner' then 'a1' when 'caregiver' then 'a2' when 'sitter' then 'a3'
+    when 'sitter_expired' then 'a4' when 'vet' then 'a5' when 'outsider' then 'a6'
+    when 'H' then 'b1' when 'P' then 'c1'
+    when 'M' then 'd1' when 'MV' then 'd2' when 'MS' then 'd3' when 'MEAL' then 'd4'
+    when 'DOSE' then 'e1' when 'FEED' then 'e2' when 'OBS' then 'e3' when 'NOTE' then 'e4'
+    when 'DOSE_EXPIRED' then 'e5'
+    when 'COND' then 'f1' when 'THR' then 'f2' when 'CON' then 'f3' when 'INV' then 'f4'
+  end)::uuid
+$$;
+
+-- Replace {key} placeholders in SQL with fixture ids
+create or replace function tests.sql(p_sql text) returns text language plpgsql immutable as $$
+declare k text;
+begin
+  foreach k in array array['owner','caregiver','sitter_expired','sitter','vet','outsider',
+                           'H','P','MV','MS','MEAL','M','DOSE_EXPIRED','DOSE','FEED','OBS','NOTE',
+                           'COND','THR','CON','INV'] loop
+    p_sql := replace(p_sql, '{' || k || '}', tests.id(k)::text);
+  end loop;
+  return p_sql;
+end $$;
+
+-- Act as a signed-in user for the rest of the transaction (until tests.logout())
+create or replace function tests.login(p_user text) returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', tests.id(p_user), 'role', 'authenticated')::text, true);
+  perform set_config('role', 'authenticated', true);
+end $$;
+
+create or replace function tests.login_anon() returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claims', '{"role":"anon"}', true);
+  perform set_config('role', 'anon', true);
+end $$;
+
+create or replace function tests.logout() returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $$;
+
+-- Run one statement as p_user, roll its effects back, and report whether it
+-- touched/saw at least one row. RLS denials (42501) count as "not allowed".
+create or replace function tests.attempt(p_user text, p_sql text) returns boolean
+language plpgsql as $$
+declare n bigint := 0;
+begin
+  perform tests.login(p_user);
+  begin
+    if p_sql ~* '^\s*select' then
+      execute tests.sql(p_sql) into n;
+    else
+      execute tests.sql(p_sql);
+      get diagnostics n = row_count;
+    end if;
+    raise exception using errcode = 'TSTRB', message = n::text;   -- undo side effects
+  exception
+    when sqlstate 'TSTRB' then n := sqlerrm::bigint;
+    when insufficient_privilege then n := 0;
+  end;
+  perform tests.logout();
+  return n > 0;
+end $$;
+
+grant execute on all functions in schema tests to authenticated, anon;
+
+-- Users (handle_new_user creates profiles)
+insert into auth.users (id, email, raw_user_meta_data, aud, role)
+select tests.id(u), u || '@atticus.test', jsonb_build_object('display_name', u), 'authenticated', 'authenticated'
+from unnest(array['owner','caregiver','sitter','sitter_expired','vet','outsider']) u;
+
+insert into public.households (id, name, timezone) values (tests.id('H'), 'Test Household', 'Asia/Manila');
+insert into public.household_members (household_id, user_id, role, expires_at) values
+  (tests.id('H'), tests.id('owner'),          'owner',     null),
+  (tests.id('H'), tests.id('caregiver'),      'caregiver', null),
+  (tests.id('H'), tests.id('sitter'),         'sitter',    now() + interval '3 days'),
+  (tests.id('H'), tests.id('sitter_expired'), 'sitter',    now() - interval '1 hour'),
+  (tests.id('H'), tests.id('vet'),            'vet',       null);
+
+insert into public.pets (id, household_id, name, species) values (tests.id('P'), tests.id('H'), 'Bantay', 'dog');
+insert into public.pet_conditions (id, pet_id, preset_key) values (tests.id('COND'), tests.id('P'), 'heart_disease');
+insert into public.pet_thresholds (id, pet_id, metric, comparator, value, unit)
+  values (tests.id('THR'), tests.id('P'), 'rrr', '>', 30, 'breaths/min');
+insert into public.vet_contacts (id, household_id, name) values (tests.id('CON'), tests.id('H'), 'Dr. Test');
+
+insert into public.medications (id, pet_id, name, quantity_on_hand, refill_alert_at, duplicate_warning_minutes)
+  values (tests.id('M'), tests.id('P'), 'Pimobendan', 40, 10, 60);
+insert into public.medication_versions (id, medication_id, dose_amount, effective_from)
+  values (tests.id('MV'), tests.id('M'), 1.75, now() - interval '30 days');
+insert into public.med_schedules (id, medication_id, time_of_day) values (tests.id('MS'), tests.id('M'), '08:00');
+insert into public.meal_schedules (id, pet_id, time_of_day, food) values (tests.id('MEAL'), tests.id('P'), '08:00', 'Cardiac diet');
+
+-- Events well outside the duplicate-dose window
+insert into public.dose_events (id, medication_id, pet_id, medication_version_id, given_at, outcome, amount, logged_by) values
+  (tests.id('DOSE'),         tests.id('M'), tests.id('P'), tests.id('MV'), now() - interval '2 days', 'given', 1.75, tests.id('caregiver')),
+  (tests.id('DOSE_EXPIRED'), tests.id('M'), tests.id('P'), tests.id('MV'), now() - interval '3 days', 'given', 1.75, tests.id('sitter_expired'));
+insert into public.feeding_events (id, pet_id, portion_eaten, logged_by)
+  values (tests.id('FEED'), tests.id('P'), 0.5, tests.id('caregiver'));
+insert into public.observation_events (id, pet_id, kind, value_num, unit, logged_by)
+  values (tests.id('OBS'), tests.id('P'), 'rrr', 24, 'breaths/min', tests.id('caregiver'));
+insert into public.handoff_notes (id, pet_id, body, created_by)
+  values (tests.id('NOTE'), tests.id('P'), 'Gave meds late', tests.id('caregiver'));
+
+insert into public.household_invites (id, household_id, role, token, created_by)
+  values (tests.id('INV'), tests.id('H'), 'caregiver', 'tok-caregiver', tests.id('owner'));
+
+-- Storage object in the household folder (direct deletes need this flag)
+select set_config('storage.allow_delete_query', 'true', true);
+insert into storage.objects (bucket_id, name)
+  values ('atticus-media', tests.id('H') || '/' || tests.id('P') || '/fixture.jpg');

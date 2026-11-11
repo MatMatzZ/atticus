@@ -1,0 +1,22 @@
+{
+  "name": "atticus",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:types": "supabase gen types typescript --local > packages/db/src/database.types.ts",
+    "db:seed-dev": "node --env-file=.env.local scripts/seed-dev.mjs",
+    "test": "npm run test --workspace @atticus/core",
+    "web": "npm run dev --workspace @atticus/web",
+    "mobile": "npm run start --workspace @atticus/mobile"
+  },
+  "devDependencies": {
+    "supabase": "^3.1.0",
+    "@supabase/supabase-js": "^2.119.0"
+  }
+}

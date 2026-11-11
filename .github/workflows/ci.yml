@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets-guard:
+    name: No secret keys in client code
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: .github/scripts/check-secrets.sh
+
+  node:
+    name: Install, test, typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Typecheck all workspaces
+        run: npm run typecheck --workspaces --if-present
+
+  database:
+    name: Supabase lint and pgTAP
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Start local Supabase (applies migrations and seed)
+        run: npx supabase start
+      - name: supabase db lint
+        run: npx supabase db lint --local --fail-on error
+      - name: pgTAP tests
+        run: npx supabase test db
+      - name: Stop Supabase
+        if: always()
+        run: npx supabase stop --no-backup
