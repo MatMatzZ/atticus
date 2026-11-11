@@ -18,13 +18,13 @@ end $$;
 -- Run p_sql as an authenticated user (or anon when p_role='anon'); changes PERSIST on success.
 -- Returns first column of first row as text, '' when none, or 'err:<sqlstate>' on failure.
 create function qa.call(p_user uuid, p_sql text, p_role text default 'authenticated') returns text language plpgsql as $$
-declare v_old text := current_setting('role'); res text := '';
+declare v_old text := current_setting('role'); res text := ''; s text := qa.sub(p_sql, p_user);
 begin
   begin
     perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', p_role)::text, true);
     perform set_config('request.jwt.claim.sub', coalesce(p_user::text, ''), true);
     perform set_config('role', p_role, true);
-    execute qa.sub(p_sql, p_user) into res;
+    execute s into res;
   exception when others then
     res := 'err:' || sqlstate;
   end;
@@ -34,13 +34,13 @@ end $$;
 
 -- Run p_sql as a user and ROLL IT BACK. Returns 'rows' | 'none' | 'err:<sqlstate>'.
 create function qa.attempt(p_user uuid, p_sql text, p_role text default 'authenticated') returns text language plpgsql as $$
-declare n int; res text;
+declare n int; res text; s text := qa.sub(p_sql, p_user);
 begin
   begin
     perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', p_role)::text, true);
     perform set_config('request.jwt.claim.sub', coalesce(p_user::text, ''), true);
     perform set_config('role', p_role, true);
-    execute qa.sub(p_sql, p_user);
+    execute s;
     get diagnostics n = row_count;
     res := case when n > 0 then 'rows' else 'none' end;
     raise exception 'qa_rollback' using errcode = 'QA000';
