@@ -33,6 +33,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Generate gitignored Expo/Next type shims
+        run: |
+          echo '/// <reference types="expo/types" />' > apps/mobile/expo-env.d.ts
       - name: Typecheck all workspaces
         run: npm run typecheck --workspaces --if-present
 
