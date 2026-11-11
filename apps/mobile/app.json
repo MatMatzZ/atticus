@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.atticus.pethealth"
+      "bundleIdentifier": "com.atticus.pethealth",
+      "entitlements": {
+        "com.apple.developer.usernotifications.time-sensitive": true
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +22,12 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.atticus.pethealth"
+      "package": "com.atticus.pethealth",
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS",
+        "VIBRATE"
+      ]
     },
     "web": {
       "output": "server",
@@ -36,11 +44,13 @@
         }
       ],
       "expo-sqlite",
+      "expo-font",
       [
         "expo-notifications",
-        {}
-      ],
-      "expo-font"
+        {
+          "defaultChannel": "care-reminders"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
