@@ -18,19 +18,40 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 15
+    outputs:
+      configured: ${{ steps.secrets.outputs.configured }}
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Skip (not fail) until the dev environment secrets are configured.
+      - name: Check Supabase secrets
+        id: secrets
+        run: |
+          missing=()
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::notice title=Dev migration skipped::Missing secrets in the 'dev' environment: ${missing[*]}. Set them to enable deploys."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.secrets.outputs.configured == 'true'
+        uses: actions/checkout@v4
+      - if: steps.secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npx supabase link --project-ref "$SUPABASE_PROJECT_REF"
-      - run: npx supabase db push --include-all
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npm ci
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npx supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npx supabase db push --include-all
 
   web:
     name: Deploy web (dev)
@@ -43,13 +64,36 @@ jobs:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Skip (not fail) until the dev environment secrets are configured.
+      - name: Check Vercel secrets
+        id: secrets
+        run: |
+          missing=()
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ "${{ needs.migrate.outputs.configured }}" != "true" ]; then
+            echo "::notice title=Dev web deploy skipped::Dev migrations were skipped, so the web deploy is skipped too."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          elif [ ${#missing[@]} -gt 0 ]; then
+            echo "::notice title=Dev web deploy skipped::Missing secrets in the 'dev' environment: ${missing[*]}. Set them to enable deploys."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.secrets.outputs.configured == 'true'
+        uses: actions/checkout@v4
+      - if: steps.secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npm ci
       # Dev uses Vercel's "preview" environment (variables point at atticus-dev).
-      - run: npx vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
-      - run: npx vercel build --token="$VERCEL_TOKEN"
-      - run: npx vercel deploy --prebuilt --token="$VERCEL_TOKEN"
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npx vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npx vercel build --token="$VERCEL_TOKEN"
+      - if: steps.secrets.outputs.configured == 'true'
+        run: npx vercel deploy --prebuilt --token="$VERCEL_TOKEN"

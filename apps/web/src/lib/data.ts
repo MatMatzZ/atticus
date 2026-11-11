@@ -15,8 +15,15 @@ export const TREND_DAYS = 14;
 /** Pets the user can see, with role, household and the user's own thresholds — one round trip. */
 export const getDashboardData = cache(async () => {
   const supabase = await createClient();
+  // Members can see each other's rows under RLS, so scope to the caller's own membership.
+  const { data: claims } = await supabase.auth.getClaims();
+  const userId = claims?.claims.sub;
+  if (!userId) throw new Error('Not signed in');
   const [members, pets] = await Promise.all([
-    supabase.from('household_members').select('household_id, role, expires_at, households(name, timezone)'),
+    supabase
+      .from('household_members')
+      .select('household_id, role, expires_at, households(name, timezone)')
+      .eq('user_id', userId),
     supabase
       .from('pets')
       .select(

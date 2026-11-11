@@ -6,3 +6,4 @@ export * from './roles';
 export * from './chart';
 export * from './reminders';
 export * from './outbox';
+export * from './design';

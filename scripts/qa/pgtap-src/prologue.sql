@@ -1,0 +1,98 @@
+-- QA fixture prologue (identical in every file under supabase/tests/database).
+-- Everything runs inside a transaction that is rolled back; no data is left behind.
+begin;
+create extension if not exists pgtap with schema extensions;
+set local search_path = public, extensions;
+create schema qa;
+
+create table qa.ids (k text primary key, v uuid not null);
+
+-- Replace {key} tokens with quoted uuids; {me} = acting user.
+create function qa.sub(p_sql text, p_me uuid) returns text language plpgsql as $$
+declare r record; s text := p_sql;
+begin
+  for r in select k, v from qa.ids loop s := replace(s, '{' || r.k || '}', quote_literal(r.v::text) || '::uuid'); end loop;
+  return replace(s, '{me}', coalesce(quote_literal(p_me::text) || '::uuid', 'null'));
+end $$;
+
+-- Run p_sql as an authenticated user (or anon when p_role='anon'); changes PERSIST on success.
+-- Returns first column of first row as text, '' when none, or 'err:<sqlstate>' on failure.
+create function qa.call(p_user uuid, p_sql text, p_role text default 'authenticated') returns text language plpgsql as $$
+declare v_old text := current_setting('role'); res text := ''; s text := qa.sub(p_sql, p_user);
+begin
+  begin
+    perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', p_role)::text, true);
+    perform set_config('request.jwt.claim.sub', coalesce(p_user::text, ''), true);
+    perform set_config('role', p_role, true);
+    execute s into res;
+  exception when others then
+    res := 'err:' || sqlstate;
+  end;
+  perform set_config('role', v_old, true);
+  return coalesce(res, '');
+end $$;
+
+-- Run p_sql as a user and ROLL IT BACK. Returns 'rows' | 'none' | 'err:<sqlstate>'.
+create function qa.attempt(p_user uuid, p_sql text, p_role text default 'authenticated') returns text language plpgsql as $$
+declare n int; res text; s text := qa.sub(p_sql, p_user);
+begin
+  begin
+    perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', p_role)::text, true);
+    perform set_config('request.jwt.claim.sub', coalesce(p_user::text, ''), true);
+    perform set_config('role', p_role, true);
+    execute s;
+    get diagnostics n = row_count;
+    res := case when n > 0 then 'rows' else 'none' end;
+    raise exception 'qa_rollback' using errcode = 'QA000';
+  exception
+    when sqlstate 'QA000' then null;
+    when others then res := 'err:' || sqlstate;
+  end;
+  return res;
+end $$;
+
+create function qa.u(p_k text) returns uuid language sql as $$ select v from qa.ids where k = p_k $$;
+
+-- ---- users: owner, caregiver (cg), sitter, sitterx (expired), vet, outsider, owner2 (other household)
+insert into qa.ids values
+ ('owner','00000000-0000-4000-8000-0000000000a1'),('cg','00000000-0000-4000-8000-0000000000a2'),
+ ('sitter','00000000-0000-4000-8000-0000000000a3'),('sitterx','00000000-0000-4000-8000-0000000000a4'),
+ ('vet','00000000-0000-4000-8000-0000000000a5'),('outsider','00000000-0000-4000-8000-0000000000a6'),
+ ('owner2','00000000-0000-4000-8000-0000000000a7'),
+ ('hh','00000000-0000-4000-8000-0000000000b1'),('hh2','00000000-0000-4000-8000-0000000000b2'),
+ ('pet','00000000-0000-4000-8000-0000000000c1'),('pet2','00000000-0000-4000-8000-0000000000c2'),
+ ('med','00000000-0000-4000-8000-0000000000d1'),('med2','00000000-0000-4000-8000-0000000000d2'),
+ ('ver','00000000-0000-4000-8000-0000000000e1'),('ver2','00000000-0000-4000-8000-0000000000e2'),
+ ('dose','00000000-0000-4000-8000-0000000000f1'),('feed','00000000-0000-4000-8000-0000000000f2'),
+ ('obs','00000000-0000-4000-8000-0000000000f3'),('note','00000000-0000-4000-8000-0000000000f4'),
+ ('inv','00000000-0000-4000-8000-0000000000f5'),('contact','00000000-0000-4000-8000-0000000000f6'),
+ ('msched','00000000-0000-4000-8000-0000000000f7'),('mealsched','00000000-0000-4000-8000-0000000000f8'),
+ ('cond','00000000-0000-4000-8000-0000000000f9'),('thr','00000000-0000-4000-8000-0000000000fa');
+
+insert into auth.users (id, instance_id, aud, role, email)
+select v, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', k || '@qa.test'
+from qa.ids where k in ('owner','cg','sitter','sitterx','vet','outsider','owner2');
+update public.profiles p set display_name = case i.k when 'owner' then 'Ana' when 'cg' then 'Ben' else i.k end
+from qa.ids i where i.v = p.id;
+
+insert into public.households (id, name, created_by) values (qa.u('hh'),'QA House',qa.u('owner')), (qa.u('hh2'),'Other House',qa.u('owner2'));
+insert into public.household_members (household_id, user_id, role, expires_at) values
+ (qa.u('hh'),qa.u('owner'),'owner',null), (qa.u('hh'),qa.u('cg'),'caregiver',null),
+ (qa.u('hh'),qa.u('sitter'),'sitter', now() + interval '30 days'),
+ (qa.u('hh'),qa.u('sitterx'),'sitter', now() - interval '1 day'),
+ (qa.u('hh'),qa.u('vet'),'vet',null), (qa.u('hh2'),qa.u('owner2'),'owner',null);
+insert into public.pets (id, household_id, name, species) values (qa.u('pet'),qa.u('hh'),'Bantay','dog'), (qa.u('pet2'),qa.u('hh2'),'Other','cat');
+insert into public.medications (id, pet_id, name, quantity_on_hand, refill_alert_at, duplicate_warning_minutes)
+ values (qa.u('med'),qa.u('pet'),'Pimobendan',40,10,60), (qa.u('med2'),qa.u('pet2'),'OtherMed',20,5,60);
+insert into public.medication_versions (id, medication_id, dose_amount) values (qa.u('ver'),qa.u('med'),1.75), (qa.u('ver2'),qa.u('med2'),1);
+insert into public.med_schedules (id, medication_id, time_of_day) values (qa.u('msched'),qa.u('med'),'08:00');
+insert into public.meal_schedules (id, pet_id, time_of_day) values (qa.u('mealsched'),qa.u('pet'),'08:00');
+insert into public.pet_conditions (id, pet_id, preset_key) values (qa.u('cond'),qa.u('pet'),'heart_disease');
+insert into public.pet_thresholds (id, pet_id, metric, comparator, value, unit) values (qa.u('thr'),qa.u('pet'),'rrr','>',99,'breaths/min');
+insert into public.vet_contacts (id, household_id, name) values (qa.u('contact'),qa.u('hh'),'Dr QA');
+insert into public.dose_events (id, medication_id, pet_id, medication_version_id, outcome, amount, logged_by)
+ values (qa.u('dose'),qa.u('med'),qa.u('pet'),qa.u('ver'),'given',1.75,qa.u('cg'));
+insert into public.feeding_events (id, pet_id, portion_eaten, logged_by) values (qa.u('feed'),qa.u('pet'),0.5,qa.u('cg'));
+insert into public.observation_events (id, pet_id, kind, logged_by) values (qa.u('obs'),qa.u('pet'),'cough',qa.u('cg'));
+insert into public.handoff_notes (id, pet_id, body, created_by) values (qa.u('note'),qa.u('pet'),'note',qa.u('cg'));
+insert into public.household_invites (id, household_id, role, created_by) values (qa.u('inv'),qa.u('hh'),'caregiver',qa.u('owner'));
